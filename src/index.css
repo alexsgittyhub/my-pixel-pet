@@ -1,0 +1,10 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: linear-gradient(135deg, #fce4ec 0%, #e8d5f5 40%, #d4f1f9 100%);
+  min-height: 100vh;
+}
