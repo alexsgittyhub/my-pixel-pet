@@ -6,18 +6,36 @@ import PetSlime from './PetSlime'
 
 /* global injected by vite.config.js define */
 /* eslint-disable no-undef */
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.2.0'
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.3.0'
 
-const DECAY_INTERVAL   = 3000
-const DECAY_AMOUNT     = 2
-const FEED_AMOUNT      = 15
-const PLAY_AMOUNT      = 15
-const MAX_STAT         = 100
-const SAD_THRESHOLD    = 30
-const COIN_PER_CLICK   = 5
-const GAME_DURATION    = 10      // seconds
-const GAME_JUMP_MS     = 1400   // how often pet teleports
-const SAVE_KEY         = 'pixelPetSave_v12'
+/* ── Constants ── */
+const DECAY_INTERVAL      = 3000
+const DECAY_AMOUNT        = 2
+const FEED_AMOUNT         = 15
+const PLAY_AMOUNT         = 15
+const MAX_STAT            = 100
+const SAD_THRESHOLD       = 30
+const COIN_PER_CLICK      = 5
+const GAME_DURATION       = 10
+const GAME_JUMP_MS        = 1400
+const SAVE_KEY            = 'pixelPetSave_v13'
+const EXPEDITION_DURATION = 10   // seconds
+const MORALE_COST         = 20   // happiness cost to launch
+
+const BIOMES = [
+  { id: 'crystalCaves', name: 'Crystal Caves', icon: '💎', rate: 0.80, artifact: 'Crystal',  textColor: 'text-indigo-300',  borderColor: 'border-indigo-500'  },
+  { id: 'neonJungle',   name: 'Neon Jungle',   icon: '🌿', rate: 0.50, artifact: 'Bio-Link', textColor: 'text-emerald-300', borderColor: 'border-emerald-500' },
+  { id: 'theVoid',      name: 'The Void',       icon: '⚛️', rate: 0.20, artifact: 'Quark',   textColor: 'text-fuchsia-300', borderColor: 'border-fuchsia-500' },
+]
+
+// Timed log messages keyed by seconds-remaining during a mission
+const MISSION_LOG_TIMED = {
+  9: '● Entering zone...',
+  7: '● Scanning perimeter...',
+  5: '● Anomaly signature detected.',
+  3: '● Bio-scanner calibrating...',
+  1: '● Signal acquired.',
+}
 
 const SHOP_ITEMS = [
   { id: 'partyHat',    label: 'Party Hat',    cost: 50,  icon: '🎉' },
@@ -58,7 +76,6 @@ function getMood(hunger, happiness) {
 }
 
 function randomPos() {
-  // Percentage positions within the game overlay (leaving room for the pet sprite)
   return { x: 8 + Math.random() * 65, y: 12 + Math.random() * 55 }
 }
 
@@ -94,7 +111,6 @@ function playBloop(ctx) {
 function playChaChing(ctx) {
   if (!ctx) return
   const t = ctx.currentTime
-  // Beep 1 — short high note
   const o1 = ctx.createOscillator(), g1 = ctx.createGain()
   o1.connect(g1); g1.connect(ctx.destination)
   o1.type = 'square'
@@ -102,7 +118,6 @@ function playChaChing(ctx) {
   g1.gain.setValueAtTime(0.14, t)
   g1.gain.exponentialRampToValueAtTime(0.001, t + 0.10)
   o1.start(t); o1.stop(t + 0.10)
-  // Beep 2 — higher, slightly delayed
   const o2 = ctx.createOscillator(), g2 = ctx.createGain()
   o2.connect(g2); g2.connect(ctx.destination)
   o2.type = 'square'
@@ -112,21 +127,21 @@ function playChaChing(ctx) {
   o2.start(t + 0.13); o2.stop(t + 0.24)
 }
 
-/* ── Sub-components ── */
+/* ── StatBar ── */
 function StatBar({ label, value, color, icon }) {
   const pct    = Math.round(value)
   const isCrit = value < SAD_THRESHOLD
   return (
     <div className="w-full">
       <div className="flex items-center justify-between mb-1">
-        <span className="flex items-center gap-1 text-xs font-pixel text-purple-700">
+        <span className="flex items-center gap-1 text-[10px] font-mono text-indigo-400">
           <span>{icon}</span><span>{label}</span>
         </span>
-        <span className={`text-xs font-pixel font-bold ${isCrit ? 'text-red-500 animate-pulse' : 'text-purple-600'}`}>
+        <span className={`text-[10px] font-mono font-bold ${isCrit ? 'text-red-400 animate-pulse' : 'text-indigo-200'}`}>
           {pct}%
         </span>
       </div>
-      <div className="h-4 w-full rounded-full bg-purple-100 border-2 border-purple-200 overflow-hidden shadow-inner">
+      <div className="h-3 w-full rounded-full bg-slate-700 border border-slate-600 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${isCrit ? 'animate-pulse2' : ''}`}
           style={{
@@ -141,34 +156,36 @@ function StatBar({ label, value, color, icon }) {
   )
 }
 
+/* ── ActionButton ── */
 function ActionButton({ onClick, label, icon, gradient, disabled, animClass }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={`
-        relative flex flex-col items-center gap-1 px-6 py-3 rounded-2xl
-        font-pixel text-xs text-white shadow-lg
+        relative flex flex-col items-center gap-1 px-5 py-2.5 rounded-xl
+        font-mono text-[10px] text-white shadow-lg border border-white/10
         transition-all duration-150
         active:scale-95 hover:scale-105 hover:shadow-xl
-        disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100
+        disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100
         ${animClass ?? ''}
       `}
       style={{ background: gradient }}
     >
-      <span className="text-2xl">{icon}</span>
+      <span className="text-xl">{icon}</span>
       <span>{label}</span>
     </button>
   )
 }
 
+/* ── ZzzParticles ── */
 function ZzzParticles() {
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
+    <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {['top-2 right-6 text-base', 'top-6 right-2 text-xs opacity-70', '-top-1 right-10 text-xs opacity-50'].map((cls, i) => (
         <span
           key={i}
-          className={`absolute font-pixel text-indigo-400 select-none animate-bounce2 ${cls}`}
+          className={`absolute font-mono text-indigo-400 select-none animate-bounce2 ${cls}`}
           style={{ animationDelay: `${i * 0.3}s`, animationDuration: '1.8s' }}
         >
           z
@@ -178,9 +195,8 @@ function ZzzParticles() {
   )
 }
 
-/* ── Pet with accessory overlay ── */
+/* ── PetWithAccessory ── */
 function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg', themeColor }) {
-  // Crown takes visual priority over hat
   const badge = accessories.includes('goldenCrown')
     ? '👑'
     : accessories.includes('partyHat')
@@ -204,32 +220,34 @@ function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg', themeC
 /* ── Shop overlay ── */
 function Shop({ coins, accessories, onBuy, onClose }) {
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-50 border-4 border-yellow-400 rounded-3xl shadow-2xl w-full max-w-xs flex flex-col items-center gap-5 p-6">
-        <h2 className="font-pixel text-yellow-700 text-sm text-center">🛍️ The Boutique</h2>
-        <p className="font-pixel text-yellow-600 text-[9px]">💰 {coins} coins</p>
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-800 border border-indigo-500/50 rounded-2xl shadow-2xl w-full max-w-xs flex flex-col items-center gap-4 p-6">
+        <h2 className="font-mono text-indigo-300 text-xs text-center tracking-widest">🛍 SUPPLY DEPOT</h2>
+        <p className="font-mono text-yellow-400 text-[10px]">💰 {coins} credits</p>
 
         <div className="w-full flex flex-col gap-3">
           {SHOP_ITEMS.map(item => {
-            const owned   = accessories.includes(item.id)
-            const canBuy  = !owned && coins >= item.cost
+            const owned  = accessories.includes(item.id)
+            const canBuy = !owned && coins >= item.cost
             return (
-              <div key={item.id} className="flex items-center gap-3 bg-white/60 rounded-2xl px-4 py-3 border-2 border-yellow-200">
-                <span className="text-3xl">{item.icon}</span>
+              <div key={item.id} className="flex items-center gap-3 bg-slate-700/50 rounded-xl px-4 py-3 border border-slate-600">
+                <span className="text-2xl">{item.icon}</span>
                 <div className="flex-1">
-                  <p className="font-pixel text-[9px] text-yellow-800">{item.label}</p>
-                  <p className="font-pixel text-[8px] text-yellow-500">💰 {item.cost} coins</p>
+                  <p className="font-mono text-[10px] text-slate-200">{item.label}</p>
+                  <p className="font-mono text-[9px] text-yellow-400">💰 {item.cost}</p>
                 </div>
                 {owned ? (
-                  <span className="font-pixel text-[8px] text-green-600 bg-green-100 rounded-xl px-2 py-1">Owned!</span>
+                  <span className="font-mono text-[9px] text-emerald-400 bg-emerald-900/30 rounded-lg px-2 py-1 border border-emerald-700/50">
+                    OWNED
+                  </span>
                 ) : (
                   <button
                     onClick={() => onBuy(item)}
                     disabled={!canBuy}
-                    className="font-pixel text-[8px] text-white rounded-xl px-3 py-1 shadow transition-all active:scale-95 hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
-                    style={{ background: canBuy ? 'linear-gradient(135deg, #f59e0b, #f97316)' : '#d1d5db' }}
+                    className="font-mono text-[9px] text-white rounded-lg px-3 py-1 border border-indigo-500/60 transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                    style={{ background: canBuy ? 'linear-gradient(135deg, #6366f1, #4f46e5)' : '#374151' }}
                   >
-                    Buy
+                    BUY
                   </button>
                 )}
               </div>
@@ -239,21 +257,21 @@ function Shop({ coins, accessories, onBuy, onClose }) {
 
         <button
           onClick={onClose}
-          className="font-pixel text-xs text-purple-600 underline underline-offset-2 hover:text-purple-800 transition-colors"
+          className="font-mono text-[10px] text-slate-500 hover:text-indigo-300 transition-colors"
         >
-          Close ✕
+          [ CLOSE ]
         </button>
       </div>
     </div>
   )
 }
 
-/* ── Mini-Game overlay ── */
+/* ── MiniGame overlay ── */
 function MiniGame({ petName, PetComponent, accessories, onEnd }) {
-  const [petPos,      setPetPos]      = useState(randomPos)
-  const [timeLeft,    setTimeLeft]    = useState(GAME_DURATION)
-  const [earned,      setEarned]      = useState(0)
-  const [clickFlash,  setClickFlash]  = useState(false)
+  const [petPos,     setPetPos]     = useState(randomPos)
+  const [timeLeft,   setTimeLeft]   = useState(GAME_DURATION)
+  const [earned,     setEarned]     = useState(0)
+  const [clickFlash, setClickFlash] = useState(false)
   const audioCtxRef = useRef(null)
 
   function getAudioCtx() {
@@ -262,14 +280,12 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
     return audioCtxRef.current
   }
 
-  // Countdown timer
   useEffect(() => {
     if (timeLeft <= 0) { onEnd(earned); return }
     const id = setTimeout(() => setTimeLeft(t => t - 1), 1000)
     return () => clearTimeout(id)
   }, [timeLeft, earned, onEnd])
 
-  // Pet jump interval
   useEffect(() => {
     if (timeLeft <= 0) return
     const id = setInterval(() => setPetPos(randomPos()), GAME_JUMP_MS)
@@ -287,12 +303,10 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
   const pct = (timeLeft / GAME_DURATION) * 100
 
   return (
-    <div className="fixed inset-0 bg-indigo-950/85 z-50 overflow-hidden select-none">
-      {/* HUD */}
+    <div className="fixed inset-0 bg-slate-900/92 z-50 overflow-hidden select-none">
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-5 pt-4 gap-3">
-        <div className="font-pixel text-yellow-300 text-xs">💰 +{earned}</div>
-        {/* Timer bar */}
-        <div className="flex-1 h-3 rounded-full bg-indigo-800 overflow-hidden border border-indigo-600">
+        <div className="font-mono text-yellow-300 text-xs">💰 +{earned}</div>
+        <div className="flex-1 h-2 rounded-full bg-slate-700 overflow-hidden border border-slate-600">
           <div
             className="h-full rounded-full transition-all duration-1000"
             style={{
@@ -301,14 +315,13 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
             }}
           />
         </div>
-        <div className="font-pixel text-indigo-200 text-xs">{timeLeft}s</div>
+        <div className="font-mono text-slate-300 text-xs">{timeLeft}s</div>
       </div>
 
-      <p className="absolute top-10 left-0 right-0 font-pixel text-indigo-300 text-[9px] text-center">
-        Catch {petName}!
+      <p className="absolute top-10 left-0 right-0 font-mono text-indigo-400 text-[9px] text-center tracking-widest">
+        CATCH {petName.toUpperCase()}!
       </p>
 
-      {/* Jumping pet */}
       <div
         className="absolute w-24 h-24 cursor-pointer"
         style={{
@@ -323,10 +336,9 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
         </div>
       </div>
 
-      {/* Coin flash */}
       {clickFlash && (
         <div
-          className="absolute font-pixel text-yellow-300 text-sm pointer-events-none animate-bounce"
+          className="absolute font-mono text-yellow-300 text-sm pointer-events-none animate-bounce"
           style={{ left: `${petPos.x + 5}%`, top: `${petPos.y - 5}%` }}
         >
           +{COIN_PER_CLICK}💰
@@ -336,22 +348,154 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
   )
 }
 
-/* ── Main game ── */
-function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave }) {
-  const [hunger,      setHunger]      = useState(100)
-  const [happiness,   setHappiness]   = useState(100)
-  const [coins,       setCoins]       = useState(initialCoins)
-  const [accessories, setAccessories] = useState(initialAccessories)
-  const [feedAnim,    setFeedAnim]    = useState(false)
-  const [playAnim,    setPlayAnim]    = useState(false)
-  const [petAnim,     setPetAnim]     = useState('bounce2')
-  const [sleeping,    setSleeping]    = useState(false)
-  const [nameWiggle,  setNameWiggle]  = useState(false)
-  const [shopOpen,    setShopOpen]    = useState(false)
-  const [gameActive,  setGameActive]  = useState(false)
-  const [gameResult,  setGameResult]  = useState(null) // null | number
+/* ── Science Lab tab ── */
+function ScienceLab({ happiness, artifacts, missionLog, onExpedition, expeditionBiome, expeditionTimeLeft, onLaunch, logRef }) {
+  const [selectedBiome, setSelectedBiome] = useState(BIOMES[0].id)
+  const canLaunch = !onExpedition && happiness >= MORALE_COST
+
+  return (
+    <div className="w-full flex flex-col gap-5">
+
+      {/* Biome selector */}
+      <div className="flex flex-col gap-2">
+        <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// SELECT BIOME</p>
+        <div className="flex flex-col gap-2">
+          {BIOMES.map(biome => (
+            <button
+              key={biome.id}
+              onClick={() => !onExpedition && setSelectedBiome(biome.id)}
+              disabled={onExpedition}
+              className={`
+                flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all text-left
+                font-mono text-[10px] disabled:opacity-40 disabled:cursor-not-allowed
+                ${selectedBiome === biome.id
+                  ? `${biome.borderColor} bg-slate-700/80 ${biome.textColor}`
+                  : 'border-slate-700 bg-slate-700/20 text-slate-500 hover:border-slate-600 hover:text-slate-400'}
+              `}
+            >
+              <span className="text-lg leading-none">{biome.icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold tracking-wide">{biome.name}</p>
+                <p className="text-[9px] opacity-60 mt-0.5">
+                  SUCCESS: {Math.round(biome.rate * 100)}% · FINDS: {biome.artifact}
+                </p>
+              </div>
+              {selectedBiome === biome.id && !onExpedition && (
+                <span className="opacity-70 text-[9px]">►</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Launch button */}
+      <button
+        onClick={() => canLaunch && onLaunch(selectedBiome)}
+        disabled={!canLaunch}
+        className={`
+          w-full py-3 rounded-xl font-mono text-[10px] tracking-widest border
+          transition-all duration-150 active:scale-95
+          ${canLaunch
+            ? 'bg-indigo-600 border-indigo-400/60 text-white hover:bg-indigo-500 shadow-lg shadow-indigo-900/40'
+            : 'bg-slate-700/50 border-slate-600 text-slate-500 cursor-not-allowed'}
+        `}
+      >
+        {onExpedition
+          ? `► MISSION IN PROGRESS... ${expeditionTimeLeft}s`
+          : happiness < MORALE_COST
+            ? `✗ MORALE TOO LOW (need ${MORALE_COST}%)`
+            : '► LAUNCH EXPEDITION'}
+      </button>
+
+      {/* Mission log */}
+      <div className="flex flex-col gap-1.5">
+        <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// MISSION LOG</p>
+        <div
+          ref={logRef}
+          className="h-36 overflow-y-auto bg-slate-900 rounded-xl border border-slate-700 p-3 flex flex-col gap-0.5 scroll-smooth"
+        >
+          {missionLog.length === 0 ? (
+            <p className="font-mono text-[9px] text-slate-600 italic">
+              No missions recorded. Launch an expedition to begin.
+            </p>
+          ) : (
+            missionLog.map((msg, i) => (
+              <p
+                key={i}
+                className={`font-mono text-[9px] leading-relaxed ${
+                  msg.startsWith('✓') ? 'text-emerald-400' :
+                  msg.startsWith('✗') ? 'text-red-400'     :
+                  msg.startsWith('►') ? 'text-indigo-400'  :
+                  'text-green-400'
+                }`}
+              >
+                {msg}
+              </p>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Artifact collection */}
+      <div className="flex flex-col gap-1.5">
+        <p className="font-mono text-[10px] text-indigo-500 tracking-widest">
+          // ARTIFACT COLLECTION [{artifacts.length}]
+        </p>
+        {artifacts.length === 0 ? (
+          <p className="font-mono text-[9px] text-slate-600 italic">
+            No artifacts collected. Send an expedition to find them.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {artifacts.map((art, i) => {
+              const biome = BIOMES.find(b => b.id === art.biome)
+              return (
+                <div
+                  key={i}
+                  title={new Date(art.timestamp).toLocaleString()}
+                  className={`
+                    flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border
+                    bg-slate-700/50 cursor-default
+                    ${biome?.borderColor ?? 'border-slate-600'}
+                  `}
+                >
+                  <span className="text-sm leading-none">{biome?.icon ?? '❓'}</span>
+                  <span className={`font-mono text-[9px] ${biome?.textColor ?? 'text-slate-300'}`}>
+                    {art.name}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ── Main Game ── */
+function Game({ petName, animal, theme, initialCoins, initialAccessories, initialArtifacts, onSave }) {
+  const [activeTab,          setActiveTab]          = useState('command')
+  const [hunger,             setHunger]             = useState(100)
+  const [happiness,          setHappiness]          = useState(100)
+  const [coins,              setCoins]              = useState(initialCoins)
+  const [accessories,        setAccessories]        = useState(initialAccessories)
+  const [artifacts,          setArtifacts]          = useState(initialArtifacts)
+  const [feedAnim,           setFeedAnim]           = useState(false)
+  const [playAnim,           setPlayAnim]           = useState(false)
+  const [petAnim,            setPetAnim]            = useState('bounce2')
+  const [sleeping,           setSleeping]           = useState(false)
+  const [nameWiggle,         setNameWiggle]         = useState(false)
+  const [shopOpen,           setShopOpen]           = useState(false)
+  const [gameActive,         setGameActive]         = useState(false)
+  const [gameResult,         setGameResult]         = useState(null)
+  const [onExpedition,       setOnExpedition]       = useState(false)
+  const [expeditionBiome,    setExpeditionBiome]    = useState(null)
+  const [expeditionTimeLeft, setExpeditionTimeLeft] = useState(0)
+  const [missionLog,         setMissionLog]         = useState([])
 
   const audioCtxRef = useRef(null)
+  const logRef      = useRef(null)
 
   function getAudioCtx() {
     if (!audioCtxRef.current) audioCtxRef.current = createAudioCtx()
@@ -359,13 +503,18 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
     return audioCtxRef.current
   }
 
-  const mood = getMood(hunger, happiness)
+  const mood         = getMood(hunger, happiness)
   const PetComponent = PET_COMPONENTS[animal] ?? PetCat
 
-  // Persist coins & accessories whenever they change
+  /* Auto-scroll mission log */
   useEffect(() => {
-    onSave({ coins, accessories })
-  }, [coins, accessories]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [missionLog])
+
+  /* Persist coins, accessories, artifacts */
+  useEffect(() => {
+    onSave({ coins, accessories, artifacts })
+  }, [coins, accessories, artifacts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Passive decay — paused while sleeping */
   useEffect(() => {
@@ -377,14 +526,56 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
     return () => clearInterval(id)
   }, [sleeping])
 
-  /* Sync pet idle animation with mood */
+  /* Sync idle animation with mood */
   useEffect(() => {
     if (mood === 'sad') setPetAnim('pulse2')
     else                setPetAnim('bounce2')
   }, [mood])
 
+  /* Expedition countdown + resolution */
+  useEffect(() => {
+    if (!onExpedition) return
+
+    if (expeditionTimeLeft <= 0) {
+      const biome   = BIOMES.find(b => b.id === expeditionBiome)
+      const success = Math.random() < biome.rate
+      if (success) {
+        const newArtifact = {
+          id:        Date.now().toString(),
+          biome:     biome.id,
+          name:      biome.artifact,
+          timestamp: Date.now(),
+        }
+        setMissionLog(prev => [...prev.slice(-49), `✓ ARTIFACT DETECTED! ${biome.artifact} recovered.`])
+        setArtifacts(prev => [...prev, newArtifact])
+        playChaChing(getAudioCtx())
+      } else {
+        setMissionLog(prev => [...prev.slice(-49), '✗ Mission failed. No artifacts found.'])
+      }
+      setOnExpedition(false)
+      setExpeditionBiome(null)
+      return
+    }
+
+    const msg = MISSION_LOG_TIMED[expeditionTimeLeft]
+    if (msg) setMissionLog(prev => [...prev.slice(-49), msg])
+
+    const id = setTimeout(() => setExpeditionTimeLeft(t => t - 1), 1000)
+    return () => clearTimeout(id)
+  }, [onExpedition, expeditionTimeLeft, expeditionBiome]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleLaunchExpedition(biomeId) {
+    if (onExpedition || happiness < MORALE_COST) return
+    const biome = BIOMES.find(b => b.id === biomeId)
+    setHappiness(h => clamp(h - MORALE_COST))
+    setOnExpedition(true)
+    setExpeditionBiome(biomeId)
+    setExpeditionTimeLeft(EXPEDITION_DURATION)
+    setMissionLog(prev => [...prev.slice(-49), `► Initiating launch sequence... [${biome.name}]`])
+  }
+
   const handleFeed = useCallback(() => {
-    if (hunger >= MAX_STAT || sleeping) return
+    if (hunger >= MAX_STAT || sleeping || onExpedition) return
     playBlip(getAudioCtx())
     setHunger(h => clamp(h + FEED_AMOUNT))
     setFeedAnim(true)
@@ -393,10 +584,10 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
       setFeedAnim(false)
       setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2')
     }, 1200)
-  }, [hunger, mood, sleeping])
+  }, [hunger, mood, sleeping, onExpedition])
 
   const handlePlay = useCallback(() => {
-    if (happiness >= MAX_STAT || sleeping) return
+    if (happiness >= MAX_STAT || sleeping || onExpedition) return
     playBloop(getAudioCtx())
     setHappiness(p => clamp(p + PLAY_AMOUNT))
     setPlayAnim(true)
@@ -405,7 +596,7 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
       setPlayAnim(false)
       setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2')
     }, 1200)
-  }, [happiness, mood, sleeping])
+  }, [happiness, mood, sleeping, onExpedition])
 
   const handleNameClick = useCallback(() => {
     if (nameWiggle) return
@@ -431,156 +622,217 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
   }, [])
 
   const moodLabel = {
-    happy:   '(≧◡≦) Yay!',
-    neutral: '(•ᴗ•)  Okay…',
-    sad:     '(╥﹏╥) Please care for me!',
+    happy:   '>> STATUS: OPTIMAL',
+    neutral: '>> STATUS: NOMINAL',
+    sad:     '>> STATUS: CRITICAL',
   }[mood]
 
-  const bgCard = sleeping
-    ? 'from-indigo-200 via-blue-200 to-slate-200'
-    : mood === 'sad'
-      ? 'from-indigo-100 via-purple-100 to-blue-100'
-      : mood === 'happy'
-        ? theme?.bg ?? 'from-pink-100 via-fuchsia-100 to-violet-100'
-        : 'from-rose-100 via-purple-100 to-cyan-100'
-
-  const borderColor = theme?.border ?? 'border-purple-300'
-
   return (
-    <div className={`min-h-screen flex items-center justify-center p-4 transition-all duration-700 ${sleeping ? 'bg-indigo-950/30' : ''}`}>
-      <div className={`
-        relative w-full max-w-sm rounded-3xl
-        bg-gradient-to-b ${bgCard}
-        border-4 ${borderColor} shadow-2xl
-        flex flex-col items-center gap-6 p-6
-        transition-all duration-700
-        ${sleeping ? 'opacity-80' : ''}
-      `}>
-        {/* Title */}
-        <h1 className="font-pixel text-purple-600 text-base tracking-tight text-center">
-          ✦ My Pixel Pet ✦
-        </h1>
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="relative w-full max-w-sm rounded-2xl bg-slate-800 border border-indigo-500/30 shadow-2xl shadow-indigo-900/40 flex flex-col overflow-hidden">
 
-        {/* Coin badge — top-right corner */}
-        <div className="absolute top-4 right-10 font-pixel text-[9px] text-yellow-700 bg-yellow-100 border border-yellow-300 rounded-xl px-2 py-0.5 shadow-sm select-none">
-          💰 {coins}
-        </div>
-
-        {/* Pet name */}
-        <p
-          onClick={handleNameClick}
-          className={`
-            font-pixel text-sm text-purple-700 cursor-pointer select-none
-            transition-transform
-            ${nameWiggle ? 'animate-wiggle' : ''}
-          `}
-          title="Click me!"
-        >
-          {petName}
-        </p>
-
-        {/* Pet stage */}
-        <div
-          className={`relative w-52 h-52 ${sleeping ? 'animate-pulse2' : (ANIM_CLASS[petAnim] ?? 'animate-bounce2')}`}
-          style={{ animationDuration: sleeping ? '3s' : mood === 'sad' ? '2.5s' : '1s' }}
-        >
-          <PetWithAccessory PetComponent={PetComponent} mood={sleeping ? 'neutral' : mood} accessories={accessories} themeColor={theme?.accent} />
-          {sleeping && <ZzzParticles />}
-        </div>
-
-        {/* Game-end result toast */}
-        {gameResult !== null && (
-          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 font-pixel text-yellow-700 bg-yellow-100 border-2 border-yellow-400 rounded-2xl px-5 py-3 shadow-xl text-xs text-center animate-bounce">
-            🎉 +{gameResult} coins!
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/80 bg-slate-900/50">
+          <h1 className="font-mono text-indigo-300 text-[11px] tracking-widest">MY PIXEL PET</h1>
+          <div className="font-mono text-[9px] text-yellow-400 bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-2 py-0.5">
+            💰 {coins}
           </div>
-        )}
-
-        {/* Mood label */}
-        {!sleeping && (
-          <p className={`font-pixel text-xs text-center transition-colors duration-500 ${
-            mood === 'sad'   ? 'text-indigo-400' :
-            mood === 'happy' ? 'text-pink-500'   : 'text-purple-500'
-          }`}>
-            {moodLabel}
-          </p>
-        )}
-        {sleeping && (
-          <p className="font-pixel text-xs text-indigo-400 text-center">
-            ( ˘ω˘ ) Sleeping…
-          </p>
-        )}
-
-        {/* Stat bars */}
-        <div className="w-full flex flex-col gap-3 px-2">
-          <StatBar label="Hunger"    value={hunger}    icon="🍓" color={['#f472b6', '#fb7185']} />
-          <StatBar label="Happiness" value={happiness} icon="⭐" color={['#c084fc', '#818cf8']} />
         </div>
 
-        {/* Primary action buttons */}
-        <div className="flex gap-3 flex-wrap justify-center">
-          <ActionButton
-            onClick={handleFeed}
-            label="Feed"
-            icon="🍓"
-            gradient="linear-gradient(135deg, #f472b6, #fb7185)"
-            disabled={hunger >= MAX_STAT || sleeping}
-            animClass={feedAnim ? 'ring-4 ring-pink-300' : ''}
-          />
-          <ActionButton
-            onClick={handlePlay}
-            label="Play"
-            icon="⭐"
-            gradient="linear-gradient(135deg, #c084fc, #818cf8)"
-            disabled={happiness >= MAX_STAT || sleeping}
-            animClass={playAnim ? 'ring-4 ring-purple-300' : ''}
-          />
-          {/* Sleep toggle */}
-          <button
-            onClick={() => setSleeping(s => !s)}
-            className={`
-              flex flex-col items-center gap-1 px-4 py-3 rounded-2xl
-              font-pixel text-xs shadow-lg transition-all duration-150
-              active:scale-95 hover:scale-105 hover:shadow-xl
-              ${sleeping
-                ? 'bg-indigo-200 text-indigo-700 ring-4 ring-indigo-300'
-                : 'bg-slate-200 text-slate-600'}
-            `}
-          >
-            <span className="text-2xl">{sleeping ? '☀️' : '🌙'}</span>
-            <span>{sleeping ? 'Wake' : 'Sleep'}</span>
-          </button>
+        {/* Tab bar */}
+        <div className="flex border-b border-slate-700/80">
+          {[
+            { id: 'command', label: 'COMMAND'     },
+            { id: 'scilab',  label: 'SCIENCE LAB' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`
+                flex-1 py-2.5 font-mono text-[10px] tracking-wider transition-all
+                ${activeTab === tab.id
+                  ? 'bg-indigo-600/20 text-indigo-300 border-b-2 border-indigo-500'
+                  : 'text-slate-500 hover:text-slate-300 border-b-2 border-transparent'}
+              `}
+            >
+              {tab.label}
+              {tab.id === 'scilab' && onExpedition && (
+                <span className="ml-1.5 text-yellow-400 animate-pulse text-[8px]">●</span>
+              )}
+            </button>
+          ))}
         </div>
 
-        {/* Secondary buttons — mini-game & shop */}
-        <div className="flex gap-3 flex-wrap justify-center">
-          <button
-            onClick={() => { if (!sleeping) setGameActive(true) }}
-            disabled={sleeping}
-            className="flex flex-col items-center gap-1 px-5 py-3 rounded-2xl font-pixel text-xs text-white shadow-lg transition-all duration-150 active:scale-95 hover:scale-105 hover:shadow-xl disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ background: 'linear-gradient(135deg, #f59e0b, #f97316)' }}
-          >
-            <span className="text-2xl">🎮</span>
-            <span>Mini-Game</span>
-          </button>
-          <button
-            onClick={() => setShopOpen(true)}
-            className="flex flex-col items-center gap-1 px-5 py-3 rounded-2xl font-pixel text-xs text-white shadow-lg transition-all duration-150 active:scale-95 hover:scale-105 hover:shadow-xl"
-            style={{ background: 'linear-gradient(135deg, #a855f7, #6366f1)' }}
-          >
-            <span className="text-2xl">🛍️</span>
-            <span>Shop</span>
-          </button>
+        {/* Tab content */}
+        <div className="p-5">
+
+          {/* ══ COMMAND TAB ══ */}
+          {activeTab === 'command' && (
+            <div className="flex flex-col items-center gap-4">
+
+              {/* Pet name */}
+              <p
+                onClick={handleNameClick}
+                className={`font-mono text-xs text-indigo-200 cursor-pointer select-none tracking-widest ${nameWiggle ? 'animate-wiggle' : ''}`}
+                title="Click me!"
+              >
+                {petName.toUpperCase()}
+              </p>
+
+              {/* Pet stage */}
+              <div className="relative flex items-center justify-center">
+                <div
+                  className={`
+                    relative w-44 h-44
+                    ${onExpedition ? 'opacity-25 grayscale' : ''}
+                    ${!onExpedition && sleeping ? 'animate-pulse2' : ''}
+                    ${!onExpedition && !sleeping ? (ANIM_CLASS[petAnim] ?? 'animate-bounce2') : ''}
+                  `}
+                  style={{ animationDuration: sleeping ? '3s' : mood === 'sad' ? '2.5s' : '1s' }}
+                >
+                  <PetWithAccessory
+                    PetComponent={PetComponent}
+                    mood={sleeping || onExpedition ? 'neutral' : mood}
+                    accessories={accessories}
+                    themeColor={theme?.accent}
+                  />
+                  {sleeping && !onExpedition && <ZzzParticles />}
+                </div>
+
+                {/* AWAY overlay during expedition */}
+                {onExpedition && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+                    <p className="font-mono text-sm text-yellow-300 tracking-widest">AWAY</p>
+                    <p className="font-mono text-[9px] text-slate-400 animate-pulse">
+                      {expeditionTimeLeft}s remaining
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Game-end coin toast */}
+              {gameResult !== null && (
+                <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 font-mono text-yellow-300 bg-slate-900 border border-yellow-500/60 rounded-xl px-5 py-3 shadow-xl text-xs text-center animate-bounce">
+                  +{gameResult} credits!
+                </div>
+              )}
+
+              {/* Status line */}
+              {onExpedition ? (
+                <p className="font-mono text-[10px] text-yellow-400 text-center animate-pulse tracking-wider">
+                  {'>> ON EXPEDITION'}
+                </p>
+              ) : sleeping ? (
+                <p className="font-mono text-[10px] text-indigo-400 text-center tracking-wider">
+                  {'>> SLEEP MODE ACTIVE'}
+                </p>
+              ) : (
+                <p className={`font-mono text-[10px] text-center tracking-wider transition-colors duration-500 ${
+                  mood === 'sad'   ? 'text-red-400'     :
+                  mood === 'happy' ? 'text-emerald-400' : 'text-indigo-300'
+                }`}>
+                  {moodLabel}
+                </p>
+              )}
+
+              {/* Stat bars */}
+              <div className="w-full flex flex-col gap-2.5">
+                <StatBar label="HUNGER" value={hunger}    icon="🍓" color={['#f472b6', '#fb7185']} />
+                <StatBar label="MORALE" value={happiness} icon="⚡" color={['#818cf8', '#6366f1']} />
+              </div>
+
+              {/* Primary actions */}
+              <div className="flex gap-2.5 flex-wrap justify-center">
+                <ActionButton
+                  onClick={handleFeed}
+                  label="FEED"
+                  icon="🍓"
+                  gradient="linear-gradient(135deg, #f472b6, #fb7185)"
+                  disabled={hunger >= MAX_STAT || sleeping || onExpedition}
+                  animClass={feedAnim ? 'ring-2 ring-pink-400/70' : ''}
+                />
+                <ActionButton
+                  onClick={handlePlay}
+                  label="PLAY"
+                  icon="⚡"
+                  gradient="linear-gradient(135deg, #818cf8, #6366f1)"
+                  disabled={happiness >= MAX_STAT || sleeping || onExpedition}
+                  animClass={playAnim ? 'ring-2 ring-indigo-400/70' : ''}
+                />
+                {/* Sleep toggle */}
+                <button
+                  onClick={() => !onExpedition && setSleeping(s => !s)}
+                  disabled={onExpedition}
+                  className={`
+                    flex flex-col items-center gap-1 px-4 py-2.5 rounded-xl
+                    font-mono text-[10px] shadow-lg transition-all duration-150 border
+                    active:scale-95 hover:scale-105
+                    disabled:opacity-30 disabled:cursor-not-allowed
+                    ${sleeping
+                      ? 'bg-indigo-900/60 border-indigo-500/60 text-indigo-300 ring-2 ring-indigo-500/30'
+                      : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-slate-500'}
+                  `}
+                >
+                  <span className="text-xl">{sleeping ? '☀️' : '🌙'}</span>
+                  <span>{sleeping ? 'WAKE' : 'SLEEP'}</span>
+                </button>
+              </div>
+
+              {/* Secondary actions */}
+              <div className="flex gap-2.5 flex-wrap justify-center">
+                <button
+                  onClick={() => { if (!sleeping && !onExpedition) setGameActive(true) }}
+                  disabled={sleeping || onExpedition}
+                  className="flex flex-col items-center gap-1 px-4 py-2.5 rounded-xl font-mono text-[10px] text-white shadow-lg transition-all active:scale-95 hover:scale-105 disabled:opacity-30 disabled:cursor-not-allowed border border-amber-700/40"
+                  style={{ background: 'linear-gradient(135deg, #b45309, #92400e)' }}
+                >
+                  <span className="text-xl">🎮</span>
+                  <span>MINI-GAME</span>
+                </button>
+                <button
+                  onClick={() => setShopOpen(true)}
+                  className="flex flex-col items-center gap-1 px-4 py-2.5 rounded-xl font-mono text-[10px] text-white shadow-lg transition-all active:scale-95 hover:scale-105 border border-violet-700/40"
+                  style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)' }}
+                >
+                  <span className="text-xl">🛍️</span>
+                  <span>SHOP</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ══ SCIENCE LAB TAB ══ */}
+          {activeTab === 'scilab' && (
+            <ScienceLab
+              happiness={happiness}
+              artifacts={artifacts}
+              missionLog={missionLog}
+              onExpedition={onExpedition}
+              expeditionBiome={expeditionBiome}
+              expeditionTimeLeft={expeditionTimeLeft}
+              onLaunch={handleLaunchExpedition}
+              logRef={logRef}
+            />
+          )}
         </div>
 
-        {/* Corner decorations */}
-        <span className="absolute top-4 left-4  text-pink-300 text-lg select-none">✦</span>
-        <span className="absolute bottom-8 left-4  text-pink-300 text-sm select-none opacity-60">✦</span>
-        <span className="absolute bottom-8 right-4 text-purple-300 text-sm select-none opacity-60">✦</span>
-
-        {/* Footer version */}
-        <p className="font-pixel text-[8px] text-gray-400 select-none mt-1">
-          Version {APP_VERSION}
-        </p>
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-slate-700/80 bg-slate-900/30">
+          <span className="font-mono text-[8px] text-slate-600 tracking-widest">
+            v{APP_VERSION} · THE EXPEDITION UPDATE
+          </span>
+          <button
+            onClick={() => {
+              if (window.confirm('Reset all data?')) {
+                localStorage.clear()
+                window.location.reload()
+              }
+            }}
+            className="font-mono text-[8px] text-slate-600 hover:text-red-400 transition-colors"
+          >
+            [RESET]
+          </button>
+        </div>
       </div>
 
       {/* Shop overlay */}
@@ -611,7 +863,7 @@ export default function App() {
   const [pet, setPet] = useState(() => loadSave())
 
   function handleAdopt(petData) {
-    const full = { ...petData, coins: 0, accessories: [] }
+    const full = { ...petData, coins: 0, accessories: [], artifacts: [] }
     writeSave(full)
     setPet(full)
   }
@@ -635,6 +887,7 @@ export default function App() {
       theme={pet.theme}
       initialCoins={pet.coins ?? 0}
       initialAccessories={pet.accessories ?? []}
+      initialArtifacts={pet.artifacts ?? []}
       onSave={handleSave}
     />
   )
