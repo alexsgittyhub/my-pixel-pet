@@ -37,7 +37,7 @@ export default {
       },
       animation: {
         bounce2: 'bounce2 0.8s ease-in-out infinite',
-        wiggle:  'wiggle 0.4s ease-in-out 3',
+        wiggle:  'wiggle 0.4s ease-in-out 0s 3',
         pulse2:  'pulse2 2s ease-in-out infinite',
       },
     },

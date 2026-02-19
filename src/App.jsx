@@ -26,6 +26,13 @@ const SHOP_ITEMS = [
 
 const PET_COMPONENTS = { cat: PetCat, dino: PetDino, slime: PetSlime }
 
+// Static map so Tailwind's content scanner can detect all animation classes
+const ANIM_CLASS = {
+  bounce2: 'animate-bounce2',
+  pulse2:  'animate-pulse2',
+  wiggle:  'animate-wiggle',
+}
+
 /* ── Persistence ── */
 function loadSave() {
   try {
@@ -172,7 +179,7 @@ function ZzzParticles() {
 }
 
 /* ── Pet with accessory overlay ── */
-function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg' }) {
+function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg', themeColor }) {
   // Crown takes visual priority over hat
   const badge = accessories.includes('goldenCrown')
     ? '👑'
@@ -189,7 +196,7 @@ function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg' }) {
           {badge}
         </div>
       )}
-      <PetComponent mood={mood} />
+      <PetComponent mood={mood} themeColor={themeColor} />
     </div>
   )
 }
@@ -474,10 +481,10 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, onSave
 
         {/* Pet stage */}
         <div
-          className={`relative w-52 h-52 animate-${sleeping ? 'pulse2' : petAnim}`}
+          className={`relative w-52 h-52 ${sleeping ? 'animate-pulse2' : (ANIM_CLASS[petAnim] ?? 'animate-bounce2')}`}
           style={{ animationDuration: sleeping ? '3s' : mood === 'sad' ? '2.5s' : '1s' }}
         >
-          <PetWithAccessory PetComponent={PetComponent} mood={sleeping ? 'neutral' : mood} accessories={accessories} />
+          <PetWithAccessory PetComponent={PetComponent} mood={sleeping ? 'neutral' : mood} accessories={accessories} themeColor={theme?.accent} />
           {sleeping && <ZzzParticles />}
         </div>
 
