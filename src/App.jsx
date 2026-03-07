@@ -1,34 +1,68 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import AdoptionCenter from './AdoptionCenter'
-import PetCat   from './PetCat'
-import PetDino  from './PetDino'
+import PetCat from './PetCat'
+import PetDino from './PetDino'
 import PetSlime from './PetSlime'
+import PetDragon from './PetDragon'
 
 /* global injected by vite.config.js define */
 /* eslint-disable no-undef */
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.3.0'
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.0'
 
 /* ── Constants ── */
-const DECAY_INTERVAL      = 3000
-const DECAY_AMOUNT        = 2
-const FEED_AMOUNT         = 15
-const PLAY_AMOUNT         = 15
-const MAX_STAT            = 100
-const SAD_THRESHOLD       = 30
-const COIN_PER_CLICK      = 5
-const GAME_DURATION       = 10
-const GAME_JUMP_MS        = 1400
-const SAVE_KEY            = 'pixelPetSave_v13'
-const EXPEDITION_DURATION = 10   // seconds
-const MORALE_COST         = 20   // happiness cost to launch
+const DECAY_INTERVAL   = 3000
+const DECAY_AMOUNT     = 2
+const FEED_AMOUNT      = 15
+const PLAY_AMOUNT      = 15
+const MAX_STAT         = 100
+const SAD_THRESHOLD    = 30
+const COIN_PER_CLICK   = 5
+const GAME_DURATION    = 10
+const GAME_JUMP_MS     = 1400
+const SAVE_KEY         = 'pixelPetSave_v14'
+const EXPEDITION_DURATION = 10
+const MORALE_COST      = 20
+
+/* ── Evolution ── */
+const EVOLUTION_STAGES = [
+  { id: 'baby',  label: 'BABY',  minXP: 0,   maxXP: 100, icon: '🥚' },
+  { id: 'teen',  label: 'TEEN',  minXP: 100, maxXP: 300, icon: '🌱' },
+  { id: 'adult', label: 'ADULT', minXP: 300, maxXP: Infinity, icon: '⭐' },
+]
+const XP_FEED       = 3
+const XP_PLAY       = 3
+const XP_EXPEDITION = 20
+
+function getStage(xp) {
+  return [...EVOLUTION_STAGES].reverse().find(s => xp >= s.minXP) ?? EVOLUTION_STAGES[0]
+}
+
+/* ── Daily streak ── */
+const STREAK_KEY = 'pixelPetStreak_v14'
+function loadStreak() {
+  try { return JSON.parse(localStorage.getItem(STREAK_KEY)) ?? { count: 0, lastDate: null } }
+  catch { return { count: 0, lastDate: null } }
+}
+function saveStreak(s) {
+  try { localStorage.setItem(STREAK_KEY, JSON.stringify(s)) } catch {}
+}
+function checkStreak() {
+  const today = new Date().toDateString()
+  const s = loadStreak()
+  if (s.lastDate === today) return s
+  const yesterday = new Date(Date.now() - 86400000).toDateString()
+  const newCount = s.lastDate === yesterday ? s.count + 1 : 1
+  const updated = { count: newCount, lastDate: today }
+  saveStreak(updated)
+  return updated
+}
 
 const BIOMES = [
-  { id: 'crystalCaves', name: 'Crystal Caves', icon: '💎', rate: 0.80, artifact: 'Crystal',  textColor: 'text-indigo-300',  borderColor: 'border-indigo-500'  },
+  { id: 'crystalCaves', name: 'Crystal Caves', icon: '💎', rate: 0.80, artifact: 'Crystal',  textColor: 'text-indigo-300', borderColor: 'border-indigo-500' },
   { id: 'neonJungle',   name: 'Neon Jungle',   icon: '🌿', rate: 0.50, artifact: 'Bio-Link', textColor: 'text-emerald-300', borderColor: 'border-emerald-500' },
-  { id: 'theVoid',      name: 'The Void',       icon: '⚛️', rate: 0.20, artifact: 'Quark',   textColor: 'text-fuchsia-300', borderColor: 'border-fuchsia-500' },
+  { id: 'theVoid',      name: 'The Void',       icon: '⚛️', rate: 0.20, artifact: 'Quark',    textColor: 'text-fuchsia-300', borderColor: 'border-fuchsia-500' },
 ]
 
-// Timed log messages keyed by seconds-remaining during a mission
 const MISSION_LOG_TIMED = {
   9: '● Entering zone...',
   7: '● Scanning perimeter...',
@@ -38,13 +72,14 @@ const MISSION_LOG_TIMED = {
 }
 
 const SHOP_ITEMS = [
-  { id: 'partyHat',    label: 'Party Hat',    cost: 50,  icon: '🎉' },
-  { id: 'goldenCrown', label: 'Golden Crown', cost: 150, icon: '👑' },
+  { id: 'partyHat',     label: 'Party Hat',    cost: 50,  icon: '🎉' },
+  { id: 'goldenCrown',  label: 'Golden Crown', cost: 150, icon: '👑' },
+  { id: 'sunglasses',   label: 'Sunglasses',   cost: 80,  icon: '😎' },
+  { id: 'jetpack',      label: 'Jetpack',       cost: 200, icon: '🚀' },
 ]
 
-const PET_COMPONENTS = { cat: PetCat, dino: PetDino, slime: PetSlime }
+const PET_COMPONENTS = { cat: PetCat, dino: PetDino, slime: PetSlime, dragon: PetDragon }
 
-// Static map so Tailwind's content scanner can detect all animation classes
 const ANIM_CLASS = {
   bounce2: 'animate-bounce2',
   pulse2:  'animate-pulse2',
@@ -53,37 +88,27 @@ const ANIM_CLASS = {
 
 /* ── Persistence ── */
 function loadSave() {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
+  try { const raw = localStorage.getItem(SAVE_KEY); return raw ? JSON.parse(raw) : null }
+  catch { return null }
 }
-
 function writeSave(data) {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)) } catch {}
 }
 
 /* ── Helpers ── */
-function clamp(val, min = 0, max = MAX_STAT) {
-  return Math.min(max, Math.max(min, val))
-}
-
+function clamp(val, min = 0, max = MAX_STAT) { return Math.min(max, Math.max(min, val)) }
 function getMood(hunger, happiness) {
   const avg = (hunger + happiness) / 2
   if (avg >= 60) return 'happy'
   if (avg < SAD_THRESHOLD) return 'sad'
   return 'neutral'
 }
-
-function randomPos() {
-  return { x: 8 + Math.random() * 65, y: 12 + Math.random() * 55 }
-}
+function randomPos() { return { x: 8 + Math.random() * 65, y: 12 + Math.random() * 55 } }
 
 /* ── Web Audio helpers ── */
 function createAudioCtx() {
   try { return new (window.AudioContext || window.webkitAudioContext)() } catch { return null }
 }
-
 function playBlip(ctx) {
   if (!ctx) return
   const osc = ctx.createOscillator(), gain = ctx.createGain()
@@ -95,7 +120,6 @@ function playBlip(ctx) {
   gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18)
   osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.18)
 }
-
 function playBloop(ctx) {
   if (!ctx) return
   const osc = ctx.createOscillator(), gain = ctx.createGain()
@@ -107,29 +131,37 @@ function playBloop(ctx) {
   gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22)
   osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.22)
 }
-
 function playChaChing(ctx) {
   if (!ctx) return
   const t = ctx.currentTime
   const o1 = ctx.createOscillator(), g1 = ctx.createGain()
   o1.connect(g1); g1.connect(ctx.destination)
-  o1.type = 'square'
-  o1.frequency.setValueAtTime(880, t)
-  g1.gain.setValueAtTime(0.14, t)
-  g1.gain.exponentialRampToValueAtTime(0.001, t + 0.10)
+  o1.type = 'square'; o1.frequency.setValueAtTime(880, t)
+  g1.gain.setValueAtTime(0.14, t); g1.gain.exponentialRampToValueAtTime(0.001, t + 0.10)
   o1.start(t); o1.stop(t + 0.10)
   const o2 = ctx.createOscillator(), g2 = ctx.createGain()
   o2.connect(g2); g2.connect(ctx.destination)
-  o2.type = 'square'
-  o2.frequency.setValueAtTime(1320, t + 0.13)
-  g2.gain.setValueAtTime(0.14, t + 0.13)
-  g2.gain.exponentialRampToValueAtTime(0.001, t + 0.24)
+  o2.type = 'square'; o2.frequency.setValueAtTime(1320, t + 0.13)
+  g2.gain.setValueAtTime(0.14, t + 0.13); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.24)
   o2.start(t + 0.13); o2.stop(t + 0.24)
+}
+function playLevelUp(ctx) {
+  if (!ctx) return
+  const t = ctx.currentTime
+  const freqs = [523, 659, 784, 1047]
+  freqs.forEach((f, i) => {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.connect(g); g.connect(ctx.destination)
+    o.type = 'sine'; o.frequency.setValueAtTime(f, t + i * 0.12)
+    g.gain.setValueAtTime(0.18, t + i * 0.12)
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.20)
+    o.start(t + i * 0.12); o.stop(t + i * 0.12 + 0.20)
+  })
 }
 
 /* ── StatBar ── */
 function StatBar({ label, value, color, icon }) {
-  const pct    = Math.round(value)
+  const pct = Math.round(value)
   const isCrit = value < SAD_THRESHOLD
   return (
     <div className="w-full">
@@ -156,6 +188,36 @@ function StatBar({ label, value, color, icon }) {
   )
 }
 
+/* ── XP / Evolution bar ── */
+function EvoBar({ xp }) {
+  const stage = getStage(xp)
+  const next = EVOLUTION_STAGES.find(s => s.minXP > stage.minXP)
+  const pct = next
+    ? Math.min(100, Math.round(((xp - stage.minXP) / (next.minXP - stage.minXP)) * 100))
+    : 100
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-1">
+        <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400">
+          <span>{stage.icon}</span>
+          <span>{stage.label}</span>
+          {next && <span className="text-slate-500 text-[9px]">→ {next.label}</span>}
+        </span>
+        <span className="text-[10px] font-mono text-amber-300">{xp} XP</span>
+      </div>
+      <div className="h-2 w-full rounded-full bg-slate-700 border border-slate-600 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{
+            width: `${pct}%`,
+            background: 'linear-gradient(90deg, #f59e0b, #fbbf24)',
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 /* ── ActionButton ── */
 function ActionButton({ onClick, label, icon, gradient, disabled, animClass }) {
   return (
@@ -165,8 +227,7 @@ function ActionButton({ onClick, label, icon, gradient, disabled, animClass }) {
       className={`
         relative flex flex-col items-center gap-1 px-5 py-2.5 rounded-xl
         font-mono text-[10px] text-white shadow-lg border border-white/10
-        transition-all duration-150
-        active:scale-95 hover:scale-105 hover:shadow-xl
+        transition-all duration-150 active:scale-95 hover:scale-105 hover:shadow-xl
         disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100
         ${animClass ?? ''}
       `}
@@ -183,13 +244,10 @@ function ZzzParticles() {
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {['top-2 right-6 text-base', 'top-6 right-2 text-xs opacity-70', '-top-1 right-10 text-xs opacity-50'].map((cls, i) => (
-        <span
-          key={i}
+        <span key={i}
           className={`absolute font-mono text-indigo-400 select-none animate-bounce2 ${cls}`}
           style={{ animationDelay: `${i * 0.3}s`, animationDuration: '1.8s' }}
-        >
-          z
-        </span>
+        >z</span>
       ))}
     </div>
   )
@@ -197,22 +255,39 @@ function ZzzParticles() {
 
 /* ── PetWithAccessory ── */
 function PetWithAccessory({ PetComponent, mood, accessories, size = 'lg', themeColor }) {
-  const badge = accessories.includes('goldenCrown')
-    ? '👑'
-    : accessories.includes('partyHat')
-      ? '🎉'
-      : null
-
+  const topAccessory = accessories.includes('jetpack')     ? '🚀'
+    : accessories.includes('goldenCrown') ? '👑'
+    : accessories.includes('partyHat')    ? '🎉'
+    : null
+  const faceAccessory = accessories.includes('sunglasses') ? '😎' : null
   const emojiSize = size === 'sm' ? 'text-xl -top-3' : 'text-3xl -top-5'
-
+  const faceSize  = size === 'sm' ? 'text-sm'       : 'text-lg'
   return (
     <div className="relative w-full h-full">
-      {badge && (
+      {topAccessory && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${emojiSize} pointer-events-none z-10 select-none`}>
-          {badge}
+          {topAccessory}
+        </div>
+      )}
+      {faceAccessory && (
+        <div className={`absolute left-1/2 -translate-x-1/2 top-1/3 ${faceSize} pointer-events-none z-10 select-none`}>
+          {faceAccessory}
         </div>
       )}
       <PetComponent mood={mood} themeColor={themeColor} />
+    </div>
+  )
+}
+
+/* ── Level-Up Toast ── */
+function LevelUpToast({ stage }) {
+  return (
+    <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
+      <div className="font-mono text-center bg-amber-900/90 border-2 border-amber-400 rounded-2xl px-6 py-4 shadow-2xl animate-bounce2">
+        <div className="text-3xl mb-1">{stage.icon}</div>
+        <div className="text-amber-300 text-xs tracking-widest">EVOLVED!</div>
+        <div className="text-amber-200 text-[10px] mt-0.5">{stage.label} STAGE</div>
+      </div>
     </div>
   )
 }
@@ -224,10 +299,9 @@ function Shop({ coins, accessories, onBuy, onClose }) {
       <div className="bg-slate-800 border border-indigo-500/50 rounded-2xl shadow-2xl w-full max-w-xs flex flex-col items-center gap-4 p-6">
         <h2 className="font-mono text-indigo-300 text-xs text-center tracking-widest">🛍 SUPPLY DEPOT</h2>
         <p className="font-mono text-yellow-400 text-[10px]">💰 {coins} credits</p>
-
         <div className="w-full flex flex-col gap-3">
           {SHOP_ITEMS.map(item => {
-            const owned  = accessories.includes(item.id)
+            const owned = accessories.includes(item.id)
             const canBuy = !owned && coins >= item.cost
             return (
               <div key={item.id} className="flex items-center gap-3 bg-slate-700/50 rounded-xl px-4 py-3 border border-slate-600">
@@ -237,42 +311,33 @@ function Shop({ coins, accessories, onBuy, onClose }) {
                   <p className="font-mono text-[9px] text-yellow-400">💰 {item.cost}</p>
                 </div>
                 {owned ? (
-                  <span className="font-mono text-[9px] text-emerald-400 bg-emerald-900/30 rounded-lg px-2 py-1 border border-emerald-700/50">
-                    OWNED
-                  </span>
+                  <span className="font-mono text-[9px] text-emerald-400 bg-emerald-900/30 rounded-lg px-2 py-1 border border-emerald-700/50">OWNED</span>
                 ) : (
                   <button
                     onClick={() => onBuy(item)}
                     disabled={!canBuy}
                     className="font-mono text-[9px] text-white rounded-lg px-3 py-1 border border-indigo-500/60 transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
                     style={{ background: canBuy ? 'linear-gradient(135deg, #6366f1, #4f46e5)' : '#374151' }}
-                  >
-                    BUY
-                  </button>
+                  >BUY</button>
                 )}
               </div>
             )
           })}
         </div>
-
-        <button
-          onClick={onClose}
-          className="font-mono text-[10px] text-slate-500 hover:text-indigo-300 transition-colors"
-        >
-          [ CLOSE ]
-        </button>
+        <button onClick={onClose} className="font-mono text-[10px] text-slate-500 hover:text-indigo-300 transition-colors">[ CLOSE ]</button>
       </div>
     </div>
   )
 }
 
 /* ── MiniGame overlay ── */
-function MiniGame({ petName, PetComponent, accessories, onEnd }) {
-  const [petPos,     setPetPos]     = useState(randomPos)
-  const [timeLeft,   setTimeLeft]   = useState(GAME_DURATION)
-  const [earned,     setEarned]     = useState(0)
+function MiniGame({ petName, PetComponent, accessories, streakCount, onEnd }) {
+  const [petPos, setPetPos] = useState(randomPos)
+  const [timeLeft, setTimeLeft] = useState(GAME_DURATION)
+  const [earned, setEarned] = useState(0)
   const [clickFlash, setClickFlash] = useState(false)
   const audioCtxRef = useRef(null)
+  const multiplier = Math.min(streakCount, 5)
 
   function getAudioCtx() {
     if (!audioCtxRef.current) audioCtxRef.current = createAudioCtx()
@@ -295,53 +360,74 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
   function handleCatch() {
     if (timeLeft <= 0) return
     playChaChing(getAudioCtx())
-    setEarned(e => e + COIN_PER_CLICK)
+    const gain = COIN_PER_CLICK * multiplier
+    setEarned(e => e + gain)
     setClickFlash(true)
     setTimeout(() => setClickFlash(false), 300)
   }
 
   const pct = (timeLeft / GAME_DURATION) * 100
-
   return (
     <div className="fixed inset-0 bg-slate-900/92 z-50 overflow-hidden select-none">
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-5 pt-4 gap-3">
         <div className="font-mono text-yellow-300 text-xs">💰 +{earned}</div>
         <div className="flex-1 h-2 rounded-full bg-slate-700 overflow-hidden border border-slate-600">
-          <div
-            className="h-full rounded-full transition-all duration-1000"
-            style={{
-              width: `${pct}%`,
-              background: pct > 40 ? 'linear-gradient(90deg,#6ee7b7,#34d399)' : 'linear-gradient(90deg,#fbbf24,#f87171)',
-            }}
+          <div className="h-full rounded-full transition-all duration-1000"
+            style={{ width: `${pct}%`, background: pct > 40 ? 'linear-gradient(90deg,#6ee7b7,#34d399)' : 'linear-gradient(90deg,#fbbf24,#f87171)' }}
           />
         </div>
         <div className="font-mono text-slate-300 text-xs">{timeLeft}s</div>
       </div>
-
-      <p className="absolute top-10 left-0 right-0 font-mono text-indigo-400 text-[9px] text-center tracking-widest">
+      {multiplier > 1 && (
+        <p className="absolute top-10 left-0 right-0 font-mono text-amber-400 text-[9px] text-center tracking-widest">
+          🔥 STREAK x{multiplier} BONUS ACTIVE
+        </p>
+      )}
+      <p className="absolute top-14 left-0 right-0 font-mono text-indigo-400 text-[9px] text-center tracking-widest">
         CATCH {petName.toUpperCase()}!
       </p>
-
-      <div
-        className="absolute w-24 h-24 cursor-pointer"
-        style={{
-          left: `${petPos.x}%`,
-          top:  `${petPos.y}%`,
-          transition: 'left 0.35s cubic-bezier(.34,1.56,.64,1), top 0.35s cubic-bezier(.34,1.56,.64,1)',
-        }}
+      <div className="absolute w-24 h-24 cursor-pointer"
+        style={{ left: `${petPos.x}%`, top: `${petPos.y}%`, transition: 'left 0.35s cubic-bezier(.34,1.56,.64,1), top 0.35s cubic-bezier(.34,1.56,.64,1)' }}
         onClick={handleCatch}
       >
         <div className={`relative w-full h-full ${clickFlash ? 'opacity-50 scale-90' : ''} transition-all duration-150`}>
           <PetWithAccessory PetComponent={PetComponent} mood="happy" accessories={accessories} size="sm" />
         </div>
       </div>
-
       {clickFlash && (
-        <div
-          className="absolute font-mono text-yellow-300 text-sm pointer-events-none animate-bounce"
+        <div className="absolute font-mono text-yellow-300 text-sm pointer-events-none animate-bounce"
           style={{ left: `${petPos.x + 5}%`, top: `${petPos.y - 5}%` }}
-        >
-          +{COIN_PER_CLICK}💰
+        >+{COIN_PER_CLICK * multiplier}💰</div>
+      )}
+    </div>
+  )
+}
+
+/* ── Mood Journal tab ── */
+function MoodJournal({ journal }) {
+  const moodColor = { happy: 'text-emerald-400', neutral: 'text-indigo-300', sad: 'text-red-400' }
+  const moodIcon  = { happy: '😊', neutral: '😐', sad: '😢' }
+  return (
+    <div className="w-full flex flex-col gap-3">
+      <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// MOOD JOURNAL</p>
+      {journal.length === 0 ? (
+        <p className="font-mono text-[9px] text-slate-600 italic">
+          No entries yet. Play, feed, and interact with your pet to fill the journal.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
+          {[...journal].reverse().map((entry, i) => (
+            <div key={i} className="flex items-center gap-2 bg-slate-700/40 rounded-lg px-3 py-2 border border-slate-600/50">
+              <span className="text-base leading-none">{moodIcon[entry.mood] ?? '❓'}</span>
+              <div className="flex-1 min-w-0">
+                <p className={`font-mono text-[9px] font-bold ${moodColor[entry.mood] ?? 'text-slate-300'}`}>{entry.mood.toUpperCase()}</p>
+                <p className="font-mono text-[8px] text-slate-500">{entry.note}</p>
+              </div>
+              <span className="font-mono text-[8px] text-slate-600 whitespace-nowrap">
+                {new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -352,22 +438,18 @@ function MiniGame({ petName, PetComponent, accessories, onEnd }) {
 function ScienceLab({ happiness, artifacts, missionLog, onExpedition, expeditionBiome, expeditionTimeLeft, onLaunch, logRef }) {
   const [selectedBiome, setSelectedBiome] = useState(BIOMES[0].id)
   const canLaunch = !onExpedition && happiness >= MORALE_COST
-
   return (
     <div className="w-full flex flex-col gap-5">
-
-      {/* Biome selector */}
       <div className="flex flex-col gap-2">
         <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// SELECT BIOME</p>
         <div className="flex flex-col gap-2">
           {BIOMES.map(biome => (
-            <button
-              key={biome.id}
+            <button key={biome.id}
               onClick={() => !onExpedition && setSelectedBiome(biome.id)}
               disabled={onExpedition}
               className={`
-                flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all text-left
-                font-mono text-[10px] disabled:opacity-40 disabled:cursor-not-allowed
+                flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all text-left font-mono text-[10px]
+                disabled:opacity-40 disabled:cursor-not-allowed
                 ${selectedBiome === biome.id
                   ? `${biome.borderColor} bg-slate-700/80 ${biome.textColor}`
                   : 'border-slate-700 bg-slate-700/20 text-slate-500 hover:border-slate-600 hover:text-slate-400'}
@@ -376,25 +458,18 @@ function ScienceLab({ happiness, artifacts, missionLog, onExpedition, expedition
               <span className="text-lg leading-none">{biome.icon}</span>
               <div className="flex-1 min-w-0">
                 <p className="font-bold tracking-wide">{biome.name}</p>
-                <p className="text-[9px] opacity-60 mt-0.5">
-                  SUCCESS: {Math.round(biome.rate * 100)}% · FINDS: {biome.artifact}
-                </p>
+                <p className="text-[9px] opacity-60 mt-0.5">SUCCESS: {Math.round(biome.rate * 100)}% · FINDS: {biome.artifact}</p>
               </div>
-              {selectedBiome === biome.id && !onExpedition && (
-                <span className="opacity-70 text-[9px]">►</span>
-              )}
+              {selectedBiome === biome.id && !onExpedition && <span className="opacity-70 text-[9px]">►</span>}
             </button>
           ))}
         </div>
       </div>
-
-      {/* Launch button */}
       <button
         onClick={() => canLaunch && onLaunch(selectedBiome)}
         disabled={!canLaunch}
         className={`
-          w-full py-3 rounded-xl font-mono text-[10px] tracking-widest border
-          transition-all duration-150 active:scale-95
+          w-full py-3 rounded-xl font-mono text-[10px] tracking-widest border transition-all duration-150 active:scale-95
           ${canLaunch
             ? 'bg-indigo-600 border-indigo-400/60 text-white hover:bg-indigo-500 shadow-lg shadow-indigo-900/40'
             : 'bg-slate-700/50 border-slate-600 text-slate-500 cursor-not-allowed'}
@@ -406,63 +481,36 @@ function ScienceLab({ happiness, artifacts, missionLog, onExpedition, expedition
             ? `✗ MORALE TOO LOW (need ${MORALE_COST}%)`
             : '► LAUNCH EXPEDITION'}
       </button>
-
-      {/* Mission log */}
       <div className="flex flex-col gap-1.5">
         <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// MISSION LOG</p>
-        <div
-          ref={logRef}
-          className="h-36 overflow-y-auto bg-slate-900 rounded-xl border border-slate-700 p-3 flex flex-col gap-0.5 scroll-smooth"
-        >
+        <div ref={logRef} className="h-36 overflow-y-auto bg-slate-900 rounded-xl border border-slate-700 p-3 flex flex-col gap-0.5 scroll-smooth">
           {missionLog.length === 0 ? (
-            <p className="font-mono text-[9px] text-slate-600 italic">
-              No missions recorded. Launch an expedition to begin.
-            </p>
+            <p className="font-mono text-[9px] text-slate-600 italic">No missions recorded. Launch an expedition to begin.</p>
           ) : (
             missionLog.map((msg, i) => (
-              <p
-                key={i}
-                className={`font-mono text-[9px] leading-relaxed ${
-                  msg.startsWith('✓') ? 'text-emerald-400' :
-                  msg.startsWith('✗') ? 'text-red-400'     :
-                  msg.startsWith('►') ? 'text-indigo-400'  :
-                  'text-green-400'
-                }`}
-              >
-                {msg}
-              </p>
+              <p key={i} className={`font-mono text-[9px] leading-relaxed ${
+                msg.startsWith('✓') ? 'text-emerald-400' :
+                msg.startsWith('✗') ? 'text-red-400' :
+                msg.startsWith('►') ? 'text-indigo-400' : 'text-green-400'
+              }`}>{msg}</p>
             ))
           )}
         </div>
       </div>
-
-      {/* Artifact collection */}
       <div className="flex flex-col gap-1.5">
-        <p className="font-mono text-[10px] text-indigo-500 tracking-widest">
-          // ARTIFACT COLLECTION [{artifacts.length}]
-        </p>
+        <p className="font-mono text-[10px] text-indigo-500 tracking-widest">// ARTIFACT COLLECTION [{artifacts.length}]</p>
         {artifacts.length === 0 ? (
-          <p className="font-mono text-[9px] text-slate-600 italic">
-            No artifacts collected. Send an expedition to find them.
-          </p>
+          <p className="font-mono text-[9px] text-slate-600 italic">No artifacts collected. Send an expedition to find them.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {artifacts.map((art, i) => {
               const biome = BIOMES.find(b => b.id === art.biome)
               return (
-                <div
-                  key={i}
-                  title={new Date(art.timestamp).toLocaleString()}
-                  className={`
-                    flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border
-                    bg-slate-700/50 cursor-default
-                    ${biome?.borderColor ?? 'border-slate-600'}
-                  `}
+                <div key={i} title={new Date(art.timestamp).toLocaleString()}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-slate-700/50 cursor-default ${biome?.borderColor ?? 'border-slate-600'}`}
                 >
                   <span className="text-sm leading-none">{biome?.icon ?? '❓'}</span>
-                  <span className={`font-mono text-[9px] ${biome?.textColor ?? 'text-slate-300'}`}>
-                    {art.name}
-                  </span>
+                  <span className={`font-mono text-[9px] ${biome?.textColor ?? 'text-slate-300'}`}>{art.name}</span>
                 </div>
               )
             })}
@@ -474,28 +522,32 @@ function ScienceLab({ happiness, artifacts, missionLog, onExpedition, expedition
 }
 
 /* ── Main Game ── */
-function Game({ petName, animal, theme, initialCoins, initialAccessories, initialArtifacts, onSave }) {
-  const [activeTab,          setActiveTab]          = useState('command')
-  const [hunger,             setHunger]             = useState(100)
-  const [happiness,          setHappiness]          = useState(100)
-  const [coins,              setCoins]              = useState(initialCoins)
-  const [accessories,        setAccessories]        = useState(initialAccessories)
-  const [artifacts,          setArtifacts]          = useState(initialArtifacts)
-  const [feedAnim,           setFeedAnim]           = useState(false)
-  const [playAnim,           setPlayAnim]           = useState(false)
-  const [petAnim,            setPetAnim]            = useState('bounce2')
-  const [sleeping,           setSleeping]           = useState(false)
-  const [nameWiggle,         setNameWiggle]         = useState(false)
-  const [shopOpen,           setShopOpen]           = useState(false)
-  const [gameActive,         setGameActive]         = useState(false)
-  const [gameResult,         setGameResult]         = useState(null)
-  const [onExpedition,       setOnExpedition]       = useState(false)
-  const [expeditionBiome,    setExpeditionBiome]    = useState(null)
+function Game({ petName, animal, theme, initialCoins, initialAccessories, initialArtifacts, initialXP, onSave }) {
+  const [activeTab, setActiveTab]           = useState('command')
+  const [hunger, setHunger]                 = useState(100)
+  const [happiness, setHappiness]           = useState(100)
+  const [coins, setCoins]                   = useState(initialCoins)
+  const [accessories, setAccessories]       = useState(initialAccessories)
+  const [artifacts, setArtifacts]           = useState(initialArtifacts)
+  const [xp, setXP]                         = useState(initialXP)
+  const [journal, setJournal]               = useState([])
+  const [feedAnim, setFeedAnim]             = useState(false)
+  const [playAnim, setPlayAnim]             = useState(false)
+  const [petAnim, setPetAnim]               = useState('bounce2')
+  const [sleeping, setSleeping]             = useState(false)
+  const [nameWiggle, setNameWiggle]         = useState(false)
+  const [shopOpen, setShopOpen]             = useState(false)
+  const [gameActive, setGameActive]         = useState(false)
+  const [gameResult, setGameResult]         = useState(null)
+  const [levelUpStage, setLevelUpStage]     = useState(null)
+  const [onExpedition, setOnExpedition]     = useState(false)
+  const [expeditionBiome, setExpeditionBiome] = useState(null)
   const [expeditionTimeLeft, setExpeditionTimeLeft] = useState(0)
-  const [missionLog,         setMissionLog]         = useState([])
-
+  const [missionLog, setMissionLog]         = useState([])
+  const [streak, setStreak]                 = useState(() => checkStreak())
   const audioCtxRef = useRef(null)
-  const logRef      = useRef(null)
+  const logRef = useRef(null)
+  const prevStageRef = useRef(getStage(initialXP).id)
 
   function getAudioCtx() {
     if (!audioCtxRef.current) audioCtxRef.current = createAudioCtx()
@@ -503,7 +555,7 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
     return audioCtxRef.current
   }
 
-  const mood         = getMood(hunger, happiness)
+  const mood = getMood(hunger, happiness)
   const PetComponent = PET_COMPONENTS[animal] ?? PetCat
 
   /* Auto-scroll mission log */
@@ -511,10 +563,8 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [missionLog])
 
-  /* Persist coins, accessories, artifacts */
-  useEffect(() => {
-    onSave({ coins, accessories, artifacts })
-  }, [coins, accessories, artifacts]) // eslint-disable-line react-hooks/exhaustive-deps
+  /* Persist */
+  useEffect(() => { onSave({ coins, accessories, artifacts, xp }) }, [coins, accessories, artifacts, xp]) // eslint-disable-line
 
   /* Passive decay — paused while sleeping */
   useEffect(() => {
@@ -529,47 +579,65 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
   /* Sync idle animation with mood */
   useEffect(() => {
     if (mood === 'sad') setPetAnim('pulse2')
-    else                setPetAnim('bounce2')
+    else setPetAnim('bounce2')
   }, [mood])
+
+  /* Mood journal — log entry whenever mood changes */
+  useEffect(() => {
+    const note = hunger < 30
+      ? 'Very hungry!'
+      : happiness < 30
+        ? 'Morale critical!'
+        : sleeping
+          ? 'Resting peacefully.'
+          : mood === 'happy'
+            ? 'Feeling great!'
+            : 'Things are okay.'
+    setJournal(prev => {
+      if (prev.length > 0 && prev[prev.length - 1].mood === mood) return prev
+      return [...prev.slice(-49), { mood, note, ts: Date.now() }]
+    })
+  }, [mood]) // eslint-disable-line
+
+  /* XP evolution check */
+  useEffect(() => {
+    const current = getStage(xp)
+    if (current.id !== prevStageRef.current) {
+      prevStageRef.current = current.id
+      playLevelUp(getAudioCtx())
+      setLevelUpStage(current)
+      setTimeout(() => setLevelUpStage(null), 2500)
+    }
+  }, [xp]) // eslint-disable-line
 
   /* Expedition countdown + resolution */
   useEffect(() => {
     if (!onExpedition) return
-
     if (expeditionTimeLeft <= 0) {
-      const biome   = BIOMES.find(b => b.id === expeditionBiome)
+      const biome = BIOMES.find(b => b.id === expeditionBiome)
       const success = Math.random() < biome.rate
       if (success) {
-        const newArtifact = {
-          id:        Date.now().toString(),
-          biome:     biome.id,
-          name:      biome.artifact,
-          timestamp: Date.now(),
-        }
+        const newArtifact = { id: Date.now().toString(), biome: biome.id, name: biome.artifact, timestamp: Date.now() }
         setMissionLog(prev => [...prev.slice(-49), `✓ ARTIFACT DETECTED! ${biome.artifact} recovered.`])
         setArtifacts(prev => [...prev, newArtifact])
+        setXP(x => x + XP_EXPEDITION)
         playChaChing(getAudioCtx())
       } else {
         setMissionLog(prev => [...prev.slice(-49), '✗ Mission failed. No artifacts found.'])
       }
-      setOnExpedition(false)
-      setExpeditionBiome(null)
-      return
+      setOnExpedition(false); setExpeditionBiome(null); return
     }
-
     const msg = MISSION_LOG_TIMED[expeditionTimeLeft]
     if (msg) setMissionLog(prev => [...prev.slice(-49), msg])
-
     const id = setTimeout(() => setExpeditionTimeLeft(t => t - 1), 1000)
     return () => clearTimeout(id)
-  }, [onExpedition, expeditionTimeLeft, expeditionBiome]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onExpedition, expeditionTimeLeft, expeditionBiome]) // eslint-disable-line
 
   function handleLaunchExpedition(biomeId) {
     if (onExpedition || happiness < MORALE_COST) return
     const biome = BIOMES.find(b => b.id === biomeId)
     setHappiness(h => clamp(h - MORALE_COST))
-    setOnExpedition(true)
-    setExpeditionBiome(biomeId)
+    setOnExpedition(true); setExpeditionBiome(biomeId)
     setExpeditionTimeLeft(EXPEDITION_DURATION)
     setMissionLog(prev => [...prev.slice(-49), `► Initiating launch sequence... [${biome.name}]`])
   }
@@ -578,54 +646,39 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
     if (hunger >= MAX_STAT || sleeping || onExpedition) return
     playBlip(getAudioCtx())
     setHunger(h => clamp(h + FEED_AMOUNT))
-    setFeedAnim(true)
-    setPetAnim('wiggle')
-    setTimeout(() => {
-      setFeedAnim(false)
-      setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2')
-    }, 1200)
-  }, [hunger, mood, sleeping, onExpedition])
+    setXP(x => x + XP_FEED)
+    setFeedAnim(true); setPetAnim('wiggle')
+    setTimeout(() => { setFeedAnim(false); setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2') }, 1200)
+  }, [hunger, mood, sleeping, onExpedition]) // eslint-disable-line
 
   const handlePlay = useCallback(() => {
     if (happiness >= MAX_STAT || sleeping || onExpedition) return
     playBloop(getAudioCtx())
     setHappiness(p => clamp(p + PLAY_AMOUNT))
-    setPlayAnim(true)
-    setPetAnim('wiggle')
-    setTimeout(() => {
-      setPlayAnim(false)
-      setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2')
-    }, 1200)
-  }, [happiness, mood, sleeping, onExpedition])
+    setXP(x => x + XP_PLAY)
+    setPlayAnim(true); setPetAnim('wiggle')
+    setTimeout(() => { setPlayAnim(false); setPetAnim(mood === 'sad' ? 'pulse2' : 'bounce2') }, 1200)
+  }, [happiness, mood, sleeping, onExpedition]) // eslint-disable-line
 
   const handleNameClick = useCallback(() => {
     if (nameWiggle) return
-    setNameWiggle(true)
-    setTimeout(() => setNameWiggle(false), 700)
+    setNameWiggle(true); setTimeout(() => setNameWiggle(false), 700)
   }, [nameWiggle])
 
   const handleBuy = useCallback((item) => {
     if (accessories.includes(item.id) || coins < item.cost) return
     playChaChing(getAudioCtx())
-    setCoins(c => c - item.cost)
-    setAccessories(a => [...a, item.id])
-  }, [accessories, coins])
+    setCoins(c => c - item.cost); setAccessories(a => [...a, item.id])
+  }, [accessories, coins]) // eslint-disable-line
 
   const handleGameEnd = useCallback((earned) => {
     setGameActive(false)
-    if (earned > 0) {
-      playChaChing(getAudioCtx())
-      setCoins(c => c + earned)
-    }
-    setGameResult(earned)
-    setTimeout(() => setGameResult(null), 2500)
-  }, [])
+    if (earned > 0) { playChaChing(getAudioCtx()); setCoins(c => c + earned) }
+    setGameResult(earned); setTimeout(() => setGameResult(null), 2500)
+  }, []) // eslint-disable-line
 
-  const moodLabel = {
-    happy:   '>> STATUS: OPTIMAL',
-    neutral: '>> STATUS: NOMINAL',
-    sad:     '>> STATUS: CRITICAL',
-  }[mood]
+  const stage = getStage(xp)
+  const moodLabel = { happy: '>> STATUS: OPTIMAL', neutral: '>> STATUS: NOMINAL', sad: '>> STATUS: CRITICAL' }[mood]
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -634,20 +687,26 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/80 bg-slate-900/50">
           <h1 className="font-mono text-indigo-300 text-[11px] tracking-widest">MY PIXEL PET</h1>
-          <div className="font-mono text-[9px] text-yellow-400 bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-2 py-0.5">
-            💰 {coins}
+          <div className="flex items-center gap-2">
+            {streak.count > 1 && (
+              <div className="font-mono text-[9px] text-orange-400 bg-orange-900/20 border border-orange-700/40 rounded-lg px-2 py-0.5">
+                🔥 {streak.count}d
+              </div>
+            )}
+            <div className="font-mono text-[9px] text-yellow-400 bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-2 py-0.5">
+              💰 {coins}
+            </div>
           </div>
         </div>
 
         {/* Tab bar */}
         <div className="flex border-b border-slate-700/80">
           {[
-            { id: 'command', label: 'COMMAND'     },
-            { id: 'scilab',  label: 'SCIENCE LAB' },
+            { id: 'command', label: 'COMMAND' },
+            { id: 'scilab',  label: 'SCI-LAB' },
+            { id: 'journal', label: 'JOURNAL' },
           ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className={`
                 flex-1 py-2.5 font-mono text-[10px] tracking-wider transition-all
                 ${activeTab === tab.id
@@ -669,25 +728,19 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
           {/* ══ COMMAND TAB ══ */}
           {activeTab === 'command' && (
             <div className="flex flex-col items-center gap-4">
-
-              {/* Pet name */}
-              <p
-                onClick={handleNameClick}
+              <p onClick={handleNameClick}
                 className={`font-mono text-xs text-indigo-200 cursor-pointer select-none tracking-widest ${nameWiggle ? 'animate-wiggle' : ''}`}
                 title="Click me!"
-              >
-                {petName.toUpperCase()}
-              </p>
+              >{petName.toUpperCase()}</p>
 
               {/* Pet stage */}
               <div className="relative flex items-center justify-center">
-                <div
-                  className={`
-                    relative w-44 h-44
-                    ${onExpedition ? 'opacity-25 grayscale' : ''}
-                    ${!onExpedition && sleeping ? 'animate-pulse2' : ''}
-                    ${!onExpedition && !sleeping ? (ANIM_CLASS[petAnim] ?? 'animate-bounce2') : ''}
-                  `}
+                <div className={`
+                  relative w-44 h-44
+                  ${onExpedition ? 'opacity-25 grayscale' : ''}
+                  ${!onExpedition && sleeping ? 'animate-pulse2' : ''}
+                  ${!onExpedition && !sleeping ? (ANIM_CLASS[petAnim] ?? 'animate-bounce2') : ''}
+                `}
                   style={{ animationDuration: sleeping ? '3s' : mood === 'sad' ? '2.5s' : '1s' }}
                 >
                   <PetWithAccessory
@@ -698,19 +751,18 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
                   />
                   {sleeping && !onExpedition && <ZzzParticles />}
                 </div>
-
-                {/* AWAY overlay during expedition */}
                 {onExpedition && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
                     <p className="font-mono text-sm text-yellow-300 tracking-widest">AWAY</p>
-                    <p className="font-mono text-[9px] text-slate-400 animate-pulse">
-                      {expeditionTimeLeft}s remaining
-                    </p>
+                    <p className="font-mono text-[9px] text-slate-400 animate-pulse">{expeditionTimeLeft}s remaining</p>
                   </div>
                 )}
               </div>
 
-              {/* Game-end coin toast */}
+              {/* Level-up toast */}
+              {levelUpStage && <LevelUpToast stage={levelUpStage} />}
+
+              {/* Coin result toast */}
               {gameResult !== null && (
                 <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 font-mono text-yellow-300 bg-slate-900 border border-yellow-500/60 rounded-xl px-5 py-3 shadow-xl text-xs text-center animate-bounce">
                   +{gameResult} credits!
@@ -719,59 +771,39 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
 
               {/* Status line */}
               {onExpedition ? (
-                <p className="font-mono text-[10px] text-yellow-400 text-center animate-pulse tracking-wider">
-                  {'>> ON EXPEDITION'}
-                </p>
+                <p className="font-mono text-[10px] text-yellow-400 text-center animate-pulse tracking-wider">{'>> ON EXPEDITION'}</p>
               ) : sleeping ? (
-                <p className="font-mono text-[10px] text-indigo-400 text-center tracking-wider">
-                  {'>> SLEEP MODE ACTIVE'}
-                </p>
+                <p className="font-mono text-[10px] text-indigo-400 text-center tracking-wider">{'>> SLEEP MODE ACTIVE'}</p>
               ) : (
                 <p className={`font-mono text-[10px] text-center tracking-wider transition-colors duration-500 ${
-                  mood === 'sad'   ? 'text-red-400'     :
-                  mood === 'happy' ? 'text-emerald-400' : 'text-indigo-300'
-                }`}>
-                  {moodLabel}
-                </p>
+                  mood === 'sad' ? 'text-red-400' : mood === 'happy' ? 'text-emerald-400' : 'text-indigo-300'
+                }`}>{moodLabel}</p>
               )}
 
               {/* Stat bars */}
               <div className="w-full flex flex-col gap-2.5">
                 <StatBar label="HUNGER" value={hunger}    icon="🍓" color={['#f472b6', '#fb7185']} />
                 <StatBar label="MORALE" value={happiness} icon="⚡" color={['#818cf8', '#6366f1']} />
+                <EvoBar xp={xp} />
               </div>
 
               {/* Primary actions */}
               <div className="flex gap-2.5 flex-wrap justify-center">
-                <ActionButton
-                  onClick={handleFeed}
-                  label="FEED"
-                  icon="🍓"
+                <ActionButton onClick={handleFeed} label="FEED" icon="🍓"
                   gradient="linear-gradient(135deg, #f472b6, #fb7185)"
                   disabled={hunger >= MAX_STAT || sleeping || onExpedition}
                   animClass={feedAnim ? 'ring-2 ring-pink-400/70' : ''}
                 />
-                <ActionButton
-                  onClick={handlePlay}
-                  label="PLAY"
-                  icon="⚡"
+                <ActionButton onClick={handlePlay} label="PLAY" icon="⚡"
                   gradient="linear-gradient(135deg, #818cf8, #6366f1)"
                   disabled={happiness >= MAX_STAT || sleeping || onExpedition}
                   animClass={playAnim ? 'ring-2 ring-indigo-400/70' : ''}
                 />
-                {/* Sleep toggle */}
                 <button
                   onClick={() => !onExpedition && setSleeping(s => !s)}
                   disabled={onExpedition}
-                  className={`
-                    flex flex-col items-center gap-1 px-4 py-2.5 rounded-xl
-                    font-mono text-[10px] shadow-lg transition-all duration-150 border
-                    active:scale-95 hover:scale-105
-                    disabled:opacity-30 disabled:cursor-not-allowed
-                    ${sleeping
-                      ? 'bg-indigo-900/60 border-indigo-500/60 text-indigo-300 ring-2 ring-indigo-500/30'
-                      : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-slate-500'}
-                  `}
+                  className={`flex flex-col items-center gap-1 px-4 py-2.5 rounded-xl font-mono text-[10px] shadow-lg transition-all duration-150 border active:scale-95 hover:scale-105 disabled:opacity-30 disabled:cursor-not-allowed
+                    ${sleeping ? 'bg-indigo-900/60 border-indigo-500/60 text-indigo-300 ring-2 ring-indigo-500/30' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-slate-500'}`}
                 >
                   <span className="text-xl">{sleeping ? '☀️' : '🌙'}</span>
                   <span>{sleeping ? 'WAKE' : 'SLEEP'}</span>
@@ -814,43 +846,30 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
               logRef={logRef}
             />
           )}
+
+          {/* ══ JOURNAL TAB ══ */}
+          {activeTab === 'journal' && <MoodJournal journal={journal} />}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-slate-700/80 bg-slate-900/30">
           <span className="font-mono text-[8px] text-slate-600 tracking-widest">
-            v{APP_VERSION} · THE EXPEDITION UPDATE
+            v{APP_VERSION} · THE EVOLUTION UPDATE
           </span>
           <button
-            onClick={() => {
-              if (window.confirm('Reset all data?')) {
-                localStorage.clear()
-                window.location.reload()
-              }
-            }}
+            onClick={() => { if (window.confirm('Reset all data?')) { localStorage.clear(); window.location.reload() } }}
             className="font-mono text-[8px] text-slate-600 hover:text-red-400 transition-colors"
-          >
-            [RESET]
-          </button>
+          >[RESET]</button>
         </div>
       </div>
 
-      {/* Shop overlay */}
-      {shopOpen && (
-        <Shop
-          coins={coins}
-          accessories={accessories}
-          onBuy={handleBuy}
-          onClose={() => setShopOpen(false)}
-        />
-      )}
-
-      {/* Mini-game overlay */}
+      {shopOpen && <Shop coins={coins} accessories={accessories} onBuy={handleBuy} onClose={() => setShopOpen(false)} />}
       {gameActive && (
         <MiniGame
           petName={petName}
           PetComponent={PetComponent}
           accessories={accessories}
+          streakCount={streak.count}
           onEnd={handleGameEnd}
         />
       )}
@@ -858,14 +877,13 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
   )
 }
 
-/* ── Root: adoption gate + persistence ── */
+/* ── Root ── */
 export default function App() {
   const [pet, setPet] = useState(() => loadSave())
 
   function handleAdopt(petData) {
-    const full = { ...petData, coins: 0, accessories: [], artifacts: [] }
-    writeSave(full)
-    setPet(full)
+    const full = { ...petData, coins: 0, accessories: [], artifacts: [], xp: 0 }
+    writeSave(full); setPet(full)
   }
 
   function handleSave(updates) {
@@ -876,9 +894,7 @@ export default function App() {
     })
   }
 
-  if (!pet) {
-    return <AdoptionCenter onAdopt={handleAdopt} />
-  }
+  if (!pet) return <AdoptionCenter onAdopt={handleAdopt} />
 
   return (
     <Game
@@ -888,6 +904,7 @@ export default function App() {
       initialCoins={pet.coins ?? 0}
       initialAccessories={pet.accessories ?? []}
       initialArtifacts={pet.artifacts ?? []}
+      initialXP={pet.xp ?? 0}
       onSave={handleSave}
     />
   )
