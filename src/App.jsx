@@ -7,7 +7,7 @@ import PetDragon from './PetDragon'
 
 /* global injected by vite.config.js define */
 /* eslint-disable no-undef */
-const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.0'
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.1'
 
 /* ── Constants ── */
 const DECAY_INTERVAL   = 3000
@@ -688,6 +688,9 @@ function Game({ petName, animal, theme, initialCoins, initialAccessories, initia
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/80 bg-slate-900/50">
           <h1 className="font-mono text-indigo-300 text-[11px] tracking-widest">MY PIXEL PET</h1>
           <div className="flex items-center gap-2">
+            <div className="font-mono text-[9px] text-cyan-300 bg-cyan-900/20 border border-cyan-700/40 rounded-lg px-2 py-0.5">
+              BUILD v{APP_VERSION}
+            </div>
             {streak.count > 1 && (
               <div className="font-mono text-[9px] text-orange-400 bg-orange-900/20 border border-orange-700/40 rounded-lg px-2 py-0.5">
                 🔥 {streak.count}d
