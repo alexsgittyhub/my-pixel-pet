@@ -6,7 +6,7 @@ const { version } = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
 export default defineConfig({
   plugins: [react()],
-  base: '/my-pixel-pet/',
+  base: '/',
   define: {
     __APP_VERSION__: JSON.stringify(version),
   },
